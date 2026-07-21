@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kişisel Medrese & Kütüphane</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- PDF.js (Yerel PDF parçalama için) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';</script>
+
+    <!-- Tesseract.js (Resmi Yazıya Çeviren Yerel Motor) -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+    <!-- LocalForage (Sınırsız IndexedDB Depolama İçin) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Inter:wght@300;400;600&family=Scheherazade+New:wght@400;700&family=Noto+Naskh+Arabic:wght@400;700&display=swap');
+        
+        body { font-family: 'Inter', sans-serif; background-color: #0f0f0f; color: #e5e5e5; margin: 0; padding: 0; overflow: hidden; }
+        
+        .arabic-text { font-family: 'Amiri', serif; font-size: 1.6rem; line-height: 2.4rem; text-align: right; direction: rtl; }
+        
+        /* Özel Scrollbar */
+        .custom-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+        .custom-scroll::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb:hover { background: #666; }
+
+        /* Kağıt Dokusu (Canvas Alanı) */
+        .paper-texture {
+            background-color: #f4ecd8;
+            background-image: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100' height='100' filter='url(%23noise)' opacity='0.08'/%3E%3C/svg%3E");
+            box-shadow: inset 0 0 50px rgba(0,0,0,0.1);
+        }
+
+        /* Modal Arka Planı */
+        .modal-overlay { background-color: rgba(0, 0, 0, 0.85); backdrop-filter: blur(5px); }
+
+        /* Sürükleme (Pan) ve Yakınlaştırma (Zoom) imleçleri */
+        #page-canvas { cursor: grab; transform-origin: top left; transition: transform 0.1s ease-out; }
+        #page-canvas:active { cursor: grabbing; }
+        .canvas-container { overflow: hidden; position: relative; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center;}
+        
+        /* Drag & Drop Sürükleme Efektleri */
+        .drag-over { border-top: 2px solid #f59e0b; padding-top: 2px; }
+        .dragging { opacity: 0.5; }
+    </style>
+</head>
+<body class="h-screen flex flex-col">
+
+    <!-- Özel Bildirim Kutusu (Toast) -->
+    <div id="toast-container" class="fixed bottom-10 left-1/2 transform -translate-x-1/2 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+    <!-- Özel Giriş Modalı -->
+    <div id="custom-modal" class="fixed inset-0 modal-overlay z-[70] hidden flex items-center justify-center">
+        <div class="bg-[#1a1a1a] border border-gray-700 rounded-xl p-6 w-96 shadow-2xl transform transition-all scale-95 opacity-0" id="modal-content">
+            <h2 id="modal-title" class="text-xl font-semibold text-amber-500 mb-2">Başlık</h2>
+            <p id="modal-desc" class="text-gray-400 text-sm mb-4">Açıklama metni.</p>
+            <input type="text" id="modal-input" class="w-full bg-[#0f0f0f] border border-gray-600 rounded px-4 py-3 text-white focus:outline-none focus:border-amber-500 mb-4" placeholder="Buraya yazın...">
+            <div class="flex justify-end gap-3">
+                <button onclick="closeModal()" class="px-4 py-2 rounded text-gray-400 hover:text-white transition bg-[#2a2a2a] hover:bg-[#333]">İptal</button>
+                <button id="modal-confirm-btn" class="bg-amber-700 hover:bg-amber-600 text-white px-5 py-2 rounded shadow transition font-semibold">Onayla</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PDF/OCR İşlem Yüzde Çubuğu Modalı -->
+    <div id="progress-modal" class="fixed inset-0 modal-overlay z-[60] hidden flex flex-col items-center justify-center">
+        <div class="bg-[#1a1a1a] border border-gray-700 rounded-xl p-8 w-[400px] shadow-2xl flex flex-col items-center text-center">
+            <i id="progress-icon" class="fa-solid fa-microchip text-amber-500 text-5xl mb-4 animate-pulse"></i>
+            <h3 id="progress-title" class="text-white text-lg font-semibold mb-2">İşlem Yapılıyor...</h3>
+            <p id="progress-desc" class="text-sm text-gray-400 mb-5">Lütfen sekme değiştirmeyin ve bekleyin.</p>
+            <div class="w-full bg-gray-800 rounded-full h-4 mb-3 overflow-hidden border border-gray-700 shadow-inner">
+                <div id="progress-bar" class="bg-gradient-to-r from-amber-600 to-amber-400 h-4 rounded-full transition-all duration-300" style="width: 0%"></div>
+            </div>
+            <p id="progress-text" class="text-amber-500 font-bold text-sm tracking-wide mb-4">0 / 0 Tamamlandı</p>
+            <button id="cancel-progress-btn" onclick="cancelProcess()" class="text-sm text-red-500 hover:text-red-400 underline decoration-red-500/50 transition px-3 py-1 rounded hover:bg-red-500/10">İşlemi İptal Et</button>
+        </div>
+    </div>
+
+    <!-- ANA EKRAN -->
+    <div class="flex-1 flex overflow-hidden">
+        
+        <!-- 1. SOL PANEL: Kütüphane Menüsü (Klasörler) -->
+        <div class="w-[260px] bg-[#111] border-r border-gray-800 flex flex-col shrink-0 z-20 shadow-xl">
+            <!-- Üst Logo -->
+            <div class="p-5 border-b border-gray-800 flex items-center gap-3 shrink-0 bg-[#0a0a0a]">
+                <div class="w-12 h-12 bg-gradient-to-br from-amber-700 to-amber-900 rounded-lg shadow-lg flex items-center justify-center text-2xl border border-amber-600/30">
+                    <i class="fa-solid fa-book-quran text-[#f4ecd8]"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-gray-100 tracking-wide text-lg">Medrese</h1>
+                    <p class="text-[10px] text-amber-500/80 tracking-widest uppercase font-semibold">Kişisel Kütüphane</p>
+                </div>
+            </div>
+
+            <!-- Kategoriler ve Kitaplar Listesi -->
+            <div id="library-list" class="flex-1 overflow-y-auto custom-scroll p-3 space-y-2">
+                <!-- JS İle Doldurulacak -->
+            </div>
+
+            <!-- Yeni Kategori Ekleme Butonu -->
+            <div class="p-4 border-t border-gray-800 shrink-0 bg-[#111]">
+                <button onclick="openAddCategoryModal()" class="w-full py-2.5 bg-[#1a1a1a] border border-gray-700 text-gray-300 rounded hover:border-amber-500 hover:text-amber-400 transition text-sm flex items-center justify-center gap-2 shadow">
+                    <i class="fa-solid fa-folder-plus"></i> Yeni Klasör Ekle
+                </button>
+            </div>
+        </div>
+
+        <!-- BOŞ EKRAN (Kitap seçilmediğinde görünür) -->
+        <div id="empty-state" class="flex-1 flex flex-col items-center justify-center text-gray-500 bg-[#161616] z-10">
+            <div class="w-32 h-32 rounded-full border-4 border-gray-800 flex items-center justify-center mb-6">
+                <i class="fa-solid fa-book-open text-6xl opacity-30 text-gray-400"></i>
+            </div>
+            <h2 class="text-xl font-semibold text-gray-400 mb-2">Çalışma Masası Boş</h2>
+            <p class="text-sm">Okumaya başlamak veya kitap yüklemek için sol menüden bir eser seçin.</p>
+        </div>
+
+        <!-- ÇALIŞMA MASASI (2 Kolonlu: Sol PDF, Sağ Üst/Alt Bölmeli Metinler) -->
+        <div class="flex-1 flex hidden z-10" id="reading-workspace">
+            
+            <!-- SOL KOLON (Geniş Alan): KİTAP GÖRSELİ (Tuval/Canvas) -->
+            <div class="flex-1 flex flex-col relative bg-[#181818] border-r border-gray-800 shadow-2xl z-20 w-1/2">
+                <!-- Üst Bar: Kitap Adı ve Yükleme Butonları -->
+                <div class="h-14 border-b border-gray-800 flex justify-between items-center px-4 shrink-0 bg-[#121212]">
+                    <h2 id="current-book-title" class="font-semibold text-gray-200 truncate pr-4 text-sm tracking-wide">Kitap Adı</h2>
+                    <div class="flex gap-2 shrink-0">
+                        <!-- Yeni: Alan Seç (Kırpma) Butonu -->
+                        <button onclick="toggleCropMode()" id="crop-btn" class="bg-[#2a2a2a] hover:bg-[#333] border border-gray-600 px-3 py-1.5 rounded text-xs text-gray-300 transition flex items-center gap-2 shadow" title="Belirli Bir Alanı Seçip Oku">
+                            <i class="fa-solid fa-crop-simple"></i> Alan Seç
+                        </button>
+                        
+                        <input type="file" id="file-upload" class="hidden" accept="application/pdf, image/jpeg, image/png, image/webp" multiple>
+                        <button onclick="document.getElementById('file-upload').click()" class="bg-[#2a2a2a] hover:bg-[#333] border border-gray-600 px-3 py-1.5 rounded text-xs text-gray-300 transition flex items-center gap-2 shadow">
+                            <i class="fa-solid fa-file-arrow-up text-emerald-500"></i> Dosya Yükle
+                        </button>
+                        <!-- Yakınlaştırma Kontrolleri -->
+                        <div class="flex border border-gray-600 rounded overflow-hidden shadow">
+                            <button onclick="changeZoom(-0.2)" class="bg-[#2a2a2a] hover:bg-[#333] px-3 py-1.5 text-gray-300 transition" title="Uzaklaştır"><i class="fa-solid fa-magnifying-glass-minus"></i></button>
+                            <div id="zoom-level-text" class="bg-[#222] px-2 py-1.5 text-xs text-gray-400 flex items-center border-x border-gray-600 w-12 justify-center font-bold">100%</div>
+                            <button onclick="changeZoom(0.2)" class="bg-[#2a2a2a] hover:bg-[#333] px-3 py-1.5 text-gray-300 transition" title="Yakınlaştır"><i class="fa-solid fa-magnifying-glass-plus"></i></button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tuval (Resim Gösterimi) -->
+                <div class="flex-1 overflow-hidden relative" id="book-content-container">
+                    <div class="canvas-container paper-texture relative" id="canvas-wrapper">
+                        <canvas id="page-canvas"></canvas>
+                        <!-- Yeni: Kırpma / Alan Seçme Kutusu -->
+                        <div id="crop-box" class="absolute border-2 border-amber-500 bg-amber-500/20 hidden z-30" style="pointer-events: none;"></div>
+                        <button id="read-crop-btn" onclick="extractCroppedText()" onmousedown="event.stopPropagation()" class="absolute hidden z-40 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs px-3 py-1.5 rounded shadow-lg transition">Burayı Oku</button>
+                    </div>
+                </div>
+
+                <!-- Alt Bar: Sayfa Gezinme -->
+                <div class="h-14 border-t border-gray-800 bg-[#121212] flex items-center justify-between px-4 shrink-0">
+                    <div class="flex items-center gap-1">
+                        <button onclick="prevPage()" class="w-8 h-8 rounded bg-[#2a2a2a] hover:bg-[#3a3a3a] text-gray-300 flex items-center justify-center transition border border-gray-700 shadow"><i class="fa-solid fa-chevron-left"></i></button>
+                        
+                        <div class="flex items-center bg-[#1a1a1a] rounded border border-gray-700 px-2 py-1.5 shadow-inner mx-1">
+                            <input type="text" id="page-name-input" class="w-10 bg-transparent text-center text-sm font-bold text-amber-500 focus:outline-none" title="Sayfa no yaz ve Enter'a bas">
+                            <span class="text-gray-600 text-sm mx-1">/</span>
+                            <span id="total-pages" class="text-gray-500 text-sm font-bold w-8 text-center">0</span>
+                            <button onclick="renameCurrentPage()" class="ml-1 text-gray-500 hover:text-amber-500 transition px-1" title="Sayfa İsmini Değiştir"><i class="fa-solid fa-pen text-xs"></i></button>
+                        </div>
+                        
+                        <button onclick="nextPage()" class="w-8 h-8 rounded bg-[#2a2a2a] hover:bg-[#3a3a3a] text-gray-300 flex items-center justify-center transition border border-gray-700 shadow"><i class="fa-solid fa-chevron-right"></i></button>
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                        <button onclick="deleteCurrentPage()" class="text-xs text-red-500 hover:text-red-400 bg-red-900/20 px-2 py-1.5 rounded transition border border-red-900/50" title="Geçerli Sayfayı Sil"><i class="fa-solid fa-trash"></i></button>
+                        <div class="w-px h-5 bg-gray-700 mx-1"></div>
+                        <button onclick="addNewBlankPage()" class="bg-emerald-700 hover:bg-emerald-600 text-white text-xs px-3 py-1.5 rounded shadow transition flex items-center gap-1 font-semibold">
+                            <i class="fa-solid fa-plus"></i> Boş Sayfa
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SAĞ KOLON: METİNLER (Üst/Alt Bölmeli) -->
+            <div class="flex-1 flex flex-col min-w-[350px] shrink-0 z-10 bg-[#161616]">
+                
+                <!-- ÜST YARI: ARAPÇA İBARE (Siyah Görünüm) -->
+                <div class="flex-1 flex flex-col border-b border-gray-800 bg-[#161616] relative h-1/2 shadow-inner">
+                    <!-- Üst Bar -->
+                    <div class="h-14 bg-[#111] border-b border-gray-800 flex justify-between items-center px-3 shrink-0 shadow-sm">
+                        <h3 class="text-blue-400 font-bold text-sm flex items-center tracking-wide"><i class="fa-solid fa-language mr-2 text-blue-500/70"></i>Arapça İbare</h3>
+                        
+                        <!-- OCR & Yazı Kontrolleri -->
+                        <div class="flex items-center gap-1.5">
+                            <!-- Yazı Tipi ve Boyutu -->
+                            <select id="font-family" onchange="changeTextFont()" class="bg-[#1a1a1a] text-gray-300 text-[11px] border border-gray-700 rounded px-1 py-1 outline-none focus:border-blue-500 transition max-w-[80px]" title="Yazı Tipini Değiştir">
+                                <option value="'Amiri', serif">Amiri</option>
+                                <option value="'Scheherazade New', serif">Şehrazat</option>
+                                <option value="'Noto Naskh Arabic', serif">Naskh</option>
+                                <option value="Arial, sans-serif">Düz (Arial)</option>
+                            </select>
+
+                            <!-- Yeni: Tam Sayı Yazı Boyutu Seçici -->
+                            <select id="font-size-select" onchange="setExactTextSize()" class="bg-[#1a1a1a] text-gray-300 text-[11px] border border-gray-700 rounded px-1 py-1 outline-none focus:border-blue-500 transition" title="Yazı Boyutu">
+                                <option value="16">16px</option>
+                                <option value="18">18px</option>
+                                <option value="20">20px</option>
+                                <option value="22">22px</option>
+                                <option value="24">24px</option>
+                                <option value="26" selected>26px</option>
+                                <option value="30">30px</option>
+                                <option value="36">36px</option>
+                                <option value="42">42px</option>
+                            </select>
+
+                            <div class="flex border border-gray-700 rounded bg-[#1a1a1a] overflow-hidden mr-1">
+                                <button onclick="changeTextSize(-2)" class="px-2 py-1 text-gray-400 hover:text-white hover:bg-[#333] transition" title="Yazıyı Küçült"><i class="fa-solid fa-minus text-[10px]"></i></button>
+                                <button onclick="changeTextSize(2)" class="px-2 py-1 text-gray-400 hover:text-white hover:bg-[#333] border-l border-gray-700 transition" title="Yazıyı Büyüt"><i class="fa-solid fa-plus text-[10px]"></i></button>
+                            </div>
+
+                            <select id="ocr-lang" class="bg-[#1a1a1a] text-gray-300 text-[11px] border border-gray-700 rounded px-1 py-1 outline-none focus:border-blue-500 transition">
+                                <option value="ara">Arapça</option>
+                                <option value="tur">Türkçe</option>
+                            </select>
+                            <button onclick="extractTextLocal()" class="bg-[#1a1a1a] hover:bg-[#2a2a2a] border border-gray-700 text-blue-400 text-[11px] font-semibold px-2 py-1.5 rounded shadow transition flex items-center gap-1" title="Sadece ekrandaki resmi yüksek çözünürlükte okur">
+                                <i class="fa-solid fa-eye"></i> Derin Oku
+                            </button>
+                            <button onclick="extractTextBatchLocal()" class="bg-blue-700 hover:bg-blue-600 text-white text-[11px] font-semibold px-2 py-1.5 rounded shadow transition flex items-center gap-1" title="Kitaptaki tüm resimleri baştan sona okur">
+                                <i class="fa-solid fa-layer-group"></i> Toplu Çıkar
+                            </button>
+                            <button onclick="clearArea('arabic-area')" title="Metni Temizle" class="text-xs text-gray-500 hover:text-red-400 transition ml-1 px-1"><i class="fa-solid fa-eraser"></i></button>
+                        </div>
+                    </div>
+                    <!-- Siyah Yazı Alanı -->
+                    <div id="arabic-area" contenteditable="true" class="flex-1 overflow-y-auto p-6 bg-[#1a1a1a] text-gray-200 custom-scroll arabic-text focus:outline-none placeholder-gray-600" style="font-size: 26px; line-height: 1.8;" placeholder="Yapay zeka metni buraya çıkaracak..." oninput="saveCurrentPageData()"></div>
+                </div>
+
+                <!-- ALT YARI: ÇEVİRİ VE NOTLAR -->
+                <div class="flex-1 flex flex-col bg-[#161616] h-1/2">
+                    <!-- Üst Bar -->
+                    <div class="h-14 bg-[#111] border-b border-gray-800 flex justify-between items-center px-4 shrink-0 shadow-sm">
+                        <h3 class="text-emerald-500 font-bold text-sm flex items-center tracking-wide"><i class="fa-solid fa-pen-nib mr-2 text-emerald-600/70"></i>Çeviri & Notlar</h3>
+                        <button onclick="clearArea('notes-area')" title="Metni Temizle" class="text-xs text-gray-500 hover:text-red-500 transition"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                    <!-- Koyu Tema Yazı Alanı -->
+                    <div id="notes-area" contenteditable="true" class="flex-1 overflow-y-auto p-5 bg-[#1a1a1a] text-gray-300 custom-scroll text-[15px] leading-relaxed focus:outline-none placeholder-gray-600" placeholder="Kendi çevirilerinizi ve şerhlerinizi buraya yazabilirsiniz..." oninput="saveCurrentPageData()"></div>
+                </div>
+
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- VERİ YAPISI ---
+        let medreseData = {
+            categories: [
+                { id: 'cat_1', name: 'HADİS' },
+                { id: 'cat_2', name: 'TEFSİR' },
+                { id: 'cat_3', name: 'FIKIH' },
+                { id: 'cat_4', name: 'AKAİD' },
+                { id: 'cat_5', name: 'SARF-NAHİV' }
+            ],
+            books: []
+        };
+
+        // --- DURUM DEĞİŞKENLERİ ---
+        let currentBookId = null;
+        let currentBookInfo = null;
+        let activePageIndex = 0;
+        
+        let zoomLevel = 1.0;
+        let isDragging = false;
+        let startX, startY, translateX = 0, translateY = 0;
+
+        let currentModalAction = null;
+        let currentModalParams = null;
+        let draggedCategoryIndex = null;
+        
+        let isProcessCanceled = false; // İşlem iptal bayrağı
+        
+        let currentTextSize = 26; // Varsayılan yazı boyutu
+
+        // Kısmi Seçim (Crop) Değişkenleri
+        let isCropMode = false;
+        let isDrawingCrop = false;
+        let cropStart = {x: 0, y: 0};
+        let cropRect = {x:0, y:0, w:0, h:0};
+
+        // --- BAŞLANGIÇ & VERİTABANI YÜKLEME ---
+        window.onload = async () => {
+            try {
+                // Sınırsız Veritabanı LocalForage (IndexedDB) kullanarak veriyi çekiyoruz
+                const savedData = await localforage.getItem('medreseDataLocal');
+                if (savedData) {
+                    medreseData.categories = savedData.categories || medreseData.categories;
+                    medreseData.books = savedData.books || [];
+                } else {
+                    const oldData = localStorage.getItem('medreseDataLocal');
+                    if (oldData) {
+                        const parsedData = JSON.parse(oldData);
+                        medreseData.categories = parsedData.categories || medreseData.categories;
+                        medreseData.books = parsedData.books || [];
+                        localStorage.removeItem('medreseDataLocal'); 
+                        saveData();
+                    }
+                }
+            } catch(e) { console.error("Veri yükleme hatası", e); }
+
+            renderLibrary();
+            setupCanvasEvents();
+            setupPaginationEvents();
+        };
+
+        // --- GÜÇLENDİRİLMİŞ VERİ KAYDETME ---
+        let saveTimeout;
+        function saveData() {
+            clearTimeout(saveTimeout);
+            saveTimeout = setTimeout(() => {
+                localforage.setItem('medreseDataLocal', medreseData).catch(err => {
+                    console.error("Kayıt Hatası:", err);
+                    showToast("Kayıt sırasında hata oluştu!");
+                });
+            }, 300);
+        }
+
+        // --- STREAMING_CHUNK:JavaScript - UI Helpers (Toast, Modal, Drag&Drop)... ---
+        function showToast(message, duration = 3000) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = 'bg-[#252525] border border-gray-600 text-gray-200 px-5 py-2.5 rounded-lg shadow-2xl text-sm transition-opacity duration-300 flex items-center gap-3 font-medium';
+            toast.innerHTML = `<i class="fa-solid fa-bell text-amber-500"></i> ${message}`;
+            
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.classList.add('opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, duration);
+        }
+
+        function showModal(title, desc, placeholder, onConfirm, params) {
+            document.getElementById('modal-title').innerText = title;
+            document.getElementById('modal-desc').innerText = desc;
+            const inputField = document.getElementById('modal-input');
+            
+            if(placeholder === null) {
+                inputField.style.display = 'none';
+            } else {
+                inputField.style.display = 'block';
+                inputField.placeholder = placeholder;
+                inputField.value = '';
+            }
+
+            currentModalAction = onConfirm;
+            currentModalParams = params;
+
+            const modal = document.getElementById('custom-modal');
+            const content = document.getElementById('modal-content');
+            
+            modal.classList.remove('hidden');
+            setTimeout(() => {
+                content.classList.remove('scale-95', 'opacity-0');
+                content.classList.add('scale-100', 'opacity-100');
+                if(placeholder !== null) inputField.focus();
+            }, 10);
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('custom-modal');
+            const content = document.getElementById('modal-content');
+            
+            content.classList.remove('scale-100', 'opacity-100');
+            content.classList.add('scale-95', 'opacity-0');
+            
+            setTimeout(() => {
+                modal.classList.add('hidden');
+                currentModalAction = null;
+                currentModalParams = null;
+            }, 200);
+        }
+
+        document.getElementById('modal-confirm-btn').addEventListener('click', () => {
+            if(currentModalAction) {
+                const inputValue = document.getElementById('modal-input').value.trim();
+                currentModalAction(inputValue, currentModalParams);
+            }
+        });
+
+        document.getElementById('modal-input').addEventListener('keypress', (e) => {
+            if(e.key === 'Enter') document.getElementById('modal-confirm-btn').click();
+        });
+
+        // Kategori Sürükle Bırak İşlemleri
+        function handleDragStart(e, index) {
+            draggedCategoryIndex = index;
+            e.dataTransfer.effectAllowed = 'move';
+            e.currentTarget.classList.add('dragging');
+        }
+        function handleDragOver(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; e.currentTarget.classList.add('drag-over'); }
+        function handleDragLeave(e) { e.currentTarget.classList.remove('drag-over'); }
+        function handleDrop(e, targetIndex) {
+            e.stopPropagation();
+            e.currentTarget.classList.remove('drag-over');
+            if (draggedCategoryIndex !== null && draggedCategoryIndex !== targetIndex) {
+                const draggedItem = medreseData.categories.splice(draggedCategoryIndex, 1)[0];
+                medreseData.categories.splice(targetIndex, 0, draggedItem);
+                saveData(); renderLibrary();
+                showToast("Klasör sıralaması güncellendi", 1500);
+            }
+            draggedCategoryIndex = null; return false;
+        }
+        function handleDragEnd(e) { e.currentTarget.classList.remove('dragging'); }
+
+        // --- STREAMING_CHUNK:JavaScript - Library Rendering and Book Management... ---
+        function renderLibrary() {
+            const listEl = document.getElementById('library-list');
+            listEl.innerHTML = '';
+
+            medreseData.categories.forEach((cat, index) => {
+                const catBooks = medreseData.books.filter(b => b.categoryId === cat.id);
+                const catDiv = document.createElement('div');
+                catDiv.className = 'mb-3';
+                
+                catDiv.innerHTML = `
+                    <div class="flex justify-between items-center group mb-1.5 cursor-grab py-2.5 px-3 rounded-lg shadow-sm bg-[#1c1c1c] border border-gray-800 hover:border-amber-600/50 hover:bg-[#252525] transition"
+                         draggable="true" ondragstart="handleDragStart(event, ${index})" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, ${index})" ondragend="handleDragEnd(event)">
+                        <h3 class="text-[13px] font-bold text-gray-200 tracking-wider flex items-center gap-2.5 select-none">
+                            <i class="fa-solid fa-folder-open text-amber-500 text-lg"></i> ${cat.name}
+                        </h3>
+                        <div class="flex gap-1.5 opacity-0 group-hover:opacity-100 transition">
+                            <button onclick="openAddBookModal('${cat.id}')" class="text-gray-400 hover:text-emerald-500 transition px-1 bg-[#111] rounded" title="Kitap Ekle"><i class="fa-solid fa-plus text-[11px]"></i></button>
+                            <button onclick="deleteCategory('${cat.id}')" class="text-gray-500 hover:text-red-500 transition px-1 bg-[#111] rounded" title="Kategoriyi Sil"><i class="fa-solid fa-trash text-[11px]"></i></button>
+                        </div>
+                    </div>
+                    <ul class="space-y-1 ml-3 border-l border-gray-800 pl-2">
+                        ${catBooks.length === 0 ? `<li class="text-[11px] text-gray-600 italic px-2 py-1">Henüz eser yok</li>` : ''}
+                        ${catBooks.map(book => `
+                            <li class="group flex items-center justify-between py-1.5 px-2 cursor-pointer rounded transition ${currentBookId === book.id ? 'bg-[#2a2516] border-l-2 border-amber-500' : 'hover:bg-[#222]'}" >
+                                <div class="flex-1 text-[13px] ${currentBookId === book.id ? 'text-amber-400 font-semibold' : 'text-gray-400 hover:text-gray-200'}" onclick="openBook('${book.id}')">
+                                    <i class="fa-solid ${currentBookId === book.id ? 'fa-book-open text-amber-500' : 'fa-book text-gray-600'} mr-2 text-[10px]"></i> ${book.title}
+                                </div>
+                                <button onclick="deleteBook('${book.id}')" class="text-gray-600 hover:text-red-500 px-2 opacity-0 group-hover:opacity-100 transition" title="Kitabı Sil"><i class="fa-solid fa-xmark text-xs"></i></button>
+                            </li>
+                        `).join('')}
+                    </ul>
+                `;
+                listEl.appendChild(catDiv);
+            });
+        }
+
+        function openAddCategoryModal() {
+            showModal("Yeni Klasör Ekle", "Oluşturmak istediğiniz klasörün adını girin:", "Örn: Makaleler", (name) => {
+                if(name) {
+                    medreseData.categories.push({ id: 'cat_' + Date.now(), name: name.toUpperCase() });
+                    saveData(); renderLibrary(); showToast("Klasör eklendi!"); closeModal();
+                }
+            });
+        }
+
+        function deleteCategory(catId) {
+            const cat = medreseData.categories.find(c => c.id === catId);
+            showModal("Klasörü Sil", `'${cat.name}' klasörünü ve içindeki TÜM KİTAPLARI silmek istediğinize emin misiniz?`, null, () => {
+                medreseData.categories = medreseData.categories.filter(c => c.id !== catId);
+                medreseData.books = medreseData.books.filter(b => b.categoryId !== catId);
+                if(currentBookInfo && currentBookInfo.categoryId === catId) closeBook();
+                saveData(); renderLibrary(); showToast("Klasör silindi."); closeModal();
+            });
+        }
+
+        function openAddBookModal(categoryId) {
+            showModal("Yeni Kitap Ekle", "Eserin adını girin:", "Örn: Celaleyn Tefsiri", (title, catId) => {
+                if(title) {
+                    const newBook = {
+                        id: 'book_' + Date.now(), categoryId: catId, title: title,
+                        pages: [ { id: 'page_' + Date.now(), isImage: false, content: null, notes: '', arabicText: '', name: 'Fihrist' } ]
+                    };
+                    medreseData.books.push(newBook);
+                    saveData(); renderLibrary(); openBook(newBook.id); showToast("Kitap oluşturuldu."); closeModal();
+                }
+            }, categoryId);
+        }
+
+        function deleteBook(bookId) {
+            showModal("Kitabı Sil", "Bu kitabı ve içindeki tüm sayfaları silmek istediğinize emin misiniz?", null, () => {
+                medreseData.books = medreseData.books.filter(b => b.id !== bookId);
+                if(currentBookId === bookId) closeBook();
+                saveData(); renderLibrary(); showToast("Kitap silindi."); closeModal();
+            });
+        }
+
+        // --- STREAMING_CHUNK:JavaScript - Workspace Rendering and Pagination... ---
+        function openBook(bookId) {
+            currentBookId = bookId;
+            currentBookInfo = medreseData.books.find(b => b.id === bookId);
+            activePageIndex = 0;
+            
+            renderLibrary(); 
+            document.getElementById('current-book-title').innerText = currentBookInfo.title;
+            
+            // Görünümleri Değiştir
+            document.getElementById('empty-state').classList.add('hidden');
+            document.getElementById('reading-workspace').classList.remove('hidden');
+            
+            renderCurrentPage();
+        }
+
+        function closeBook() {
+            currentBookId = null; currentBookInfo = null;
+            document.getElementById('empty-state').classList.remove('hidden');
+            document.getElementById('reading-workspace').classList.add('hidden');
+            renderLibrary();
+        }
+
+        function renderCurrentPage() {
+            if(!currentBookInfo || currentBookInfo.pages.length === 0) return;
+            // Güvenlik: index sınır dışına çıkmasın
+            if(activePageIndex >= currentBookInfo.pages.length) activePageIndex = currentBookInfo.pages.length - 1;
+            
+            const pageData = currentBookInfo.pages[activePageIndex];
+            
+            document.getElementById('page-name-input').value = pageData.name || (activePageIndex + 1).toString();
+            document.getElementById('total-pages').innerText = currentBookInfo.pages.length;
+            
+            document.getElementById('arabic-area').innerText = pageData.arabicText || '';
+            document.getElementById('notes-area').innerText = pageData.notes || '';
+            
+            resetZoom();
+            const canvas = document.getElementById('page-canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            if(pageData.isImage && pageData.content) {
+                const img = new Image();
+                img.onload = () => {
+                    canvas.width = img.width; canvas.height = img.height;
+                    const container = document.getElementById('canvas-wrapper');
+                    const scaleX = (container.clientWidth - 40) / img.width;
+                    const scaleY = (container.clientHeight - 40) / img.height;
+                    const initialScale = Math.min(scaleX, scaleY, 1); 
+                    canvas.style.width = (img.width * initialScale) + 'px';
+                    canvas.style.height = (img.height * initialScale) + 'px';
+                    ctx.drawImage(img, 0, 0);
+                };
+                img.onerror = () => renderFallbackCanvas(canvas, ctx, "Resim yüklenemedi!");
+                img.src = pageData.content;
+            } else {
+                renderFallbackCanvas(canvas, ctx, "Bu sayfa boş.");
+            }
+        }
+
+        function renderFallbackCanvas(canvas, ctx, text) {
+            canvas.width = 400; canvas.height = 600;
+            canvas.style.width = '400px'; canvas.style.height = '600px';
+            ctx.fillStyle = '#f4ecd8'; ctx.fillRect(0, 0, 400, 600);
+            ctx.fillStyle = '#888'; ctx.font = '20px Inter'; ctx.textAlign = 'center';
+            ctx.fillText(text, 200, 300);
+        }
+
+        function saveCurrentPageData() {
+            if(!currentBookInfo) return;
+            const pageData = currentBookInfo.pages[activePageIndex];
+            pageData.arabicText = document.getElementById('arabic-area').innerText;
+            pageData.notes = document.getElementById('notes-area').innerText;
+            saveData();
+        }
+
+        function nextPage() {
+            if(currentBookInfo && activePageIndex < currentBookInfo.pages.length - 1) {
+                saveCurrentPageData(); activePageIndex++; renderCurrentPage();
+            }
+        }
+
+        function prevPage() {
+            if(currentBookInfo && activePageIndex > 0) {
+                saveCurrentPageData(); activePageIndex--; renderCurrentPage();
+            }
+        }
+
+        function setupPaginationEvents() {
+            const pageInput = document.getElementById('page-name-input');
+            pageInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    let val = pageInput.value.trim();
+                    let targetIndex = parseInt(val) - 1; 
+                    
+                    if(!isNaN(targetIndex) && targetIndex >= 0 && targetIndex < currentBookInfo.pages.length) {
+                        saveCurrentPageData(); activePageIndex = targetIndex; renderCurrentPage();
+                    } else {
+                        const foundIndex = currentBookInfo.pages.findIndex(p => p.name === val);
+                        if(foundIndex !== -1) {
+                            saveCurrentPageData(); activePageIndex = foundIndex; renderCurrentPage();
+                        } else {
+                            showToast("Geçersiz sayfa numarası!");
+                            pageInput.value = currentBookInfo.pages[activePageIndex].name;
+                        }
+                    }
+                }
+            });
+        }
+
+        function renameCurrentPage() {
+            if(!currentBookInfo) return;
+            const page = currentBookInfo.pages[activePageIndex];
+            showModal("Sayfa İsmini Değiştir", "Bu sayfa için yeni isim/numara belirleyin:", "Örn: 5a", (newName) => {
+                if(newName) { page.name = newName; saveData(); renderCurrentPage(); showToast("İsim güncellendi."); closeModal(); }
+            });
+        }
+
+        function addNewBlankPage() {
+            if(!currentBookInfo) return;
+            saveCurrentPageData();
+            const newPage = { id: 'page_' + Date.now(), isImage: false, content: null, notes: '', arabicText: '', name: (currentBookInfo.pages.length + 1).toString() };
+            currentBookInfo.pages.push(newPage);
+            activePageIndex = currentBookInfo.pages.length - 1;
+            saveData(); renderCurrentPage(); showToast("Boş sayfa eklendi.");
+        }
+
+        function deleteCurrentPage() {
+            if(!currentBookInfo) return;
+            if(currentBookInfo.pages.length === 1) { showToast("Son sayfayı silemezsiniz!"); return; }
+            showModal("Sayfayı Sil", "Bu sayfayı silmek istediğinize emin misiniz?", null, () => {
+                currentBookInfo.pages.splice(activePageIndex, 1);
+                if(activePageIndex >= currentBookInfo.pages.length) activePageIndex--;
+                saveData(); renderCurrentPage(); showToast("Sayfa silindi."); closeModal();
+            });
+        }
+
+        function clearArea(areaId) {
+            document.getElementById(areaId).innerText = ''; // innerText kullanarak temizle
+            document.getElementById(areaId).focus();
+            saveCurrentPageData();
+        }
+
+        // --- STREAMING_CHUNK:JavaScript - Text Area Controls... ---
+        function changeTextSize(delta) {
+            currentTextSize += delta;
+            if(currentTextSize < 12) currentTextSize = 12;
+            if(currentTextSize > 72) currentTextSize = 72;
+            document.getElementById('arabic-area').style.fontSize = currentTextSize + 'px';
+            
+            // Seçiciyi güncelle
+            const select = document.getElementById('font-size-select');
+            let optionExists = Array.from(select.options).some(opt => opt.value == currentTextSize);
+            if(!optionExists) {
+                const newOpt = new Option(currentTextSize + 'px', currentTextSize);
+                select.add(newOpt);
+            }
+            select.value = currentTextSize;
+        }
+
+        function setExactTextSize() {
+            const val = parseInt(document.getElementById('font-size-select').value);
+            currentTextSize = val;
+            document.getElementById('arabic-area').style.fontSize = currentTextSize + 'px';
+        }
+
+        function changeTextFont() {
+            const font = document.getElementById('font-family').value;
+            document.getElementById('arabic-area').style.fontFamily = font;
+        }
+
+        // --- STREAMING_CHUNK:JavaScript - Canvas Zoom and Process Management... ---
+        function changeZoom(delta) {
+            zoomLevel += delta;
+            if(zoomLevel < 0.2) zoomLevel = 0.2; if(zoomLevel > 3.0) zoomLevel = 3.0;
+            updateCanvasTransform();
+            document.getElementById('zoom-level-text').innerText = Math.round(zoomLevel * 100) + '%';
+        }
+
+        function resetZoom() {
+            zoomLevel = 1.0; translateX = 0; translateY = 0;
+            updateCanvasTransform();
+            document.getElementById('zoom-level-text').innerText = '100%';
+        }
+
+        function updateCanvasTransform() {
+            const canvas = document.getElementById('page-canvas');
+            canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${zoomLevel})`;
+        }
+
+        function setupCanvasEvents() {
+            const wrapper = document.getElementById('canvas-wrapper');
+            
+            wrapper.addEventListener('mousedown', (e) => { 
+                if (e.target.id === 'read-crop-btn') return; // Butona tıklandıysa çizim başlatma
+                
+                if(isCropMode) {
+                    isDrawingCrop = true;
+                    const rect = wrapper.getBoundingClientRect();
+                    cropStart.x = e.clientX - rect.left;
+                    cropStart.y = e.clientY - rect.top;
+                    
+                    const cropBox = document.getElementById('crop-box');
+                    cropBox.style.left = cropStart.x + 'px';
+                    cropBox.style.top = cropStart.y + 'px';
+                    cropBox.style.width = '0px';
+                    cropBox.style.height = '0px';
+                    cropBox.classList.remove('hidden');
+                    document.getElementById('read-crop-btn').classList.add('hidden');
+                } else {
+                    isDragging = true; 
+                    startX = e.clientX - translateX; 
+                    startY = e.clientY - translateY; 
+                }
+            });
+
+            window.addEventListener('mouseup', () => { 
+                isDragging = false; 
+                if(isDrawingCrop) {
+                    isDrawingCrop = false;
+                    // Okuma butonunu göster
+                    if(cropRect.w > 10 && cropRect.h > 10) {
+                        const readBtn = document.getElementById('read-crop-btn');
+                        readBtn.style.left = (cropRect.x + cropRect.w - 90) + 'px';
+                        readBtn.style.top = (cropRect.y + cropRect.h + 10) + 'px';
+                        readBtn.classList.remove('hidden');
+                    } else {
+                        document.getElementById('crop-box').classList.add('hidden');
+                    }
+                }
+            });
+
+            window.addEventListener('mousemove', (e) => {
+                if(isCropMode && isDrawingCrop) {
+                    const rect = wrapper.getBoundingClientRect();
+                    const currentX = e.clientX - rect.left;
+                    const currentY = e.clientY - rect.top;
+                    
+                    const x = Math.min(cropStart.x, currentX);
+                    const y = Math.min(cropStart.y, currentY);
+                    const w = Math.abs(currentX - cropStart.x);
+                    const h = Math.abs(currentY - cropStart.y);
+                    
+                    cropRect = {x, y, w, h};
+                    
+                    const cropBox = document.getElementById('crop-box');
+                    cropBox.style.left = x + 'px';
+                    cropBox.style.top = y + 'px';
+                    cropBox.style.width = w + 'px';
+                    cropBox.style.height = h + 'px';
+                } else if(!isDragging) {
+                    return;
+                } else {
+                    translateX = e.clientX - startX; 
+                    translateY = e.clientY - startY; 
+                    updateCanvasTransform();
+                }
+            });
+
+            wrapper.addEventListener('wheel', (e) => {
+                if(e.ctrlKey) { e.preventDefault(); changeZoom(e.deltaY < 0 ? 0.1 : -0.1); }
+            }, { passive: false });
+        }
+
+        function cancelProcess() {
+            isProcessCanceled = true;
+            document.getElementById('progress-desc').innerText = "İptal ediliyor, lütfen bekleyin...";
+            document.getElementById('cancel-progress-btn').classList.add('hidden');
+        }
+
+        // --- STREAMING_CHUNK:JavaScript - File Upload (PDF/Image) & Smart Scale... ---
+        document.getElementById('file-upload').addEventListener('change', async (e) => {
+            const files = e.target.files;
+            if(!files || files.length === 0 || !currentBookInfo) return;
+            
+            saveCurrentPageData();
+            isProcessCanceled = false;
+
+            for(let i=0; i<files.length; i++) {
+                if(isProcessCanceled) break;
+                const file = files[i];
+                if(file.type === 'application/pdf') await processPDF(file);
+                else if(file.type.startsWith('image/')) await processImage(file);
+            }
+            
+            saveData(); renderCurrentPage(); e.target.value = ''; 
+        });
+
+        function processImage(file) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    currentBookInfo.pages.push({ 
+                        id: 'page_' + Date.now() + Math.random(), isImage: true, content: e.target.result, notes: '', arabicText: '', name: (currentBookInfo.pages.length + 1).toString() 
+                    });
+                    activePageIndex = currentBookInfo.pages.length - 1;
+                    resolve();
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        async function processPDF(file) {
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+                
+                const modal = document.getElementById('progress-modal');
+                const pBar = document.getElementById('progress-bar');
+                const pText = document.getElementById('progress-text');
+                
+                document.getElementById('progress-icon').className = 'fa-solid fa-file-pdf text-amber-500 text-5xl mb-4 animate-pulse';
+                document.getElementById('progress-title').innerText = "Kitap Yükleniyor...";
+                document.getElementById('progress-desc').innerText = "Büyük kitaplar işlenirken lütfen bekleyin.";
+                document.getElementById('cancel-progress-btn').classList.remove('hidden');
+                
+                modal.classList.remove('hidden');
+                pBar.style.width = '0%'; pText.innerText = `0 / ${pdf.numPages} Sayfa Yüklendi`;
+
+                // DAHA KALİTELİ ÇÖZÜNÜRLÜK: OCR'ın harfleri iyi okuması için ölçek artırıldı
+                let renderScale = pdf.numPages > 200 ? 2.0 : (pdf.numPages > 50 ? 2.5 : 3.5);
+
+                for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                    if(isProcessCanceled) break;
+
+                    const page = await pdf.getPage(pageNum);
+                    const viewport = page.getViewport({ scale: renderScale }); 
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = viewport.width; canvas.height = viewport.height;
+                    
+                    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+                    
+                    // DAHA YÜKSEK SIKIŞTIRMA KALİTESİ: OCR hatalarını önlemek için kalite %95'e çıkarıldı.
+                    const base64Img = canvas.toDataURL('image/jpeg', 0.95); 
+                    
+                    currentBookInfo.pages.push({ 
+                        id: 'page_' + Date.now() + '_' + pageNum, isImage: true, content: base64Img, notes: '', arabicText: '', name: (currentBookInfo.pages.length + 1).toString() 
+                    });
+
+                    let percentage = ((pageNum / pdf.numPages) * 100).toFixed(0);
+                    pBar.style.width = percentage + '%';
+                    pText.innerText = `${pageNum} / ${pdf.numPages} Sayfa Yüklendi`;
+
+                    if(pageNum % 5 === 0) await new Promise(r => setTimeout(r, 20)); // UI nefes alsın
+                }
+                
+                activePageIndex = currentBookInfo.pages.length - 1; 
+                saveData(); renderCurrentPage();
+                
+                modal.classList.add('hidden');
+                if(!isProcessCanceled) showToast("PDF başarıyla eklendi!");
+                else showToast("Yükleme işlemi iptal edildi.");
+
+            } catch (error) {
+                console.error("PDF Yükleme Hatası:", error);
+                document.getElementById('progress-modal').classList.add('hidden');
+                showToast("PDF işlenirken hata oluştu!");
+            }
+        }
+
+        // --- STREAMING_CHUNK:JavaScript - Local Tesseract OCR (Single & Batch)... ---
+        function toggleCropMode() {
+            isCropMode = !isCropMode;
+            const btn = document.getElementById('crop-btn');
+            if(isCropMode) {
+                btn.classList.add('bg-amber-700', 'text-white', 'border-amber-600');
+                btn.classList.remove('bg-[#2a2a2a]', 'text-gray-300', 'border-gray-600');
+                document.getElementById('page-canvas').style.cursor = 'crosshair';
+                showToast("Seçim Modu Açık: Resim üzerinde farenizle okutulacak alanı çizin.", 3000);
+            } else {
+                btn.classList.remove('bg-amber-700', 'text-white', 'border-amber-600');
+                btn.classList.add('bg-[#2a2a2a]', 'text-gray-300', 'border-gray-600');
+                document.getElementById('page-canvas').style.cursor = 'grab';
+                document.getElementById('crop-box').classList.add('hidden');
+                document.getElementById('read-crop-btn').classList.add('hidden');
+            }
+        }
+
+        async function runOCR(imageDataBase64) {
+            const lang = document.getElementById('ocr-lang').value;
+            showToast("🔍 Okuma yapılıyor, harfler analiz ediliyor...", 4000);
+
+            try {
+                const result = await Tesseract.recognize(imageDataBase64, lang, { logger: m => {} });
+                const textArea = document.getElementById('arabic-area');
+                textArea.innerText += (textArea.innerText ? '\n\n' : '') + result.data.text;
+                saveCurrentPageData(); 
+                showToast("Metin başarıyla çıkarıldı!");
+            } catch (error) {
+                console.error(error); showToast("Okuma hatası!");
+            }
+        }
+
+        async function extractTextLocal() {
+            if(!currentBookInfo || currentBookInfo.pages.length === 0) return;
+            const pageData = currentBookInfo.pages[activePageIndex];
+            
+            if(!pageData.isImage || !pageData.content) { showToast("Bu sayfada resim yok!"); return; }
+
+            runOCR(pageData.content);
+        }
+
+        function extractCroppedText() {
+            if(!currentBookInfo || currentBookInfo.pages.length === 0) return;
+            const pageData = currentBookInfo.pages[activePageIndex];
+            if(!pageData.isImage || !pageData.content) return;
+
+            const canvas = document.getElementById('page-canvas');
+            const wrapper = document.getElementById('canvas-wrapper');
+            
+            const canvasRect = canvas.getBoundingClientRect();
+            const wrapperRect = wrapper.getBoundingClientRect();
+            
+            // Kırpılan kutunun ekrandaki mutlak konumu
+            const absoluteX = cropRect.x + wrapperRect.left;
+            const absoluteY = cropRect.y + wrapperRect.top;
+            
+            // Canvas'ın (zoom uygulanmış) içindeki göreceli konumu
+            const relativeX = absoluteX - canvasRect.left;
+            const relativeY = absoluteY - canvasRect.top;
+            
+            // Canvas'ın CSS boyutu ile gerçek piksel boyutu arasındaki oran
+            const ratioX = canvas.width / canvasRect.width;
+            const ratioY = canvas.height / canvasRect.height;
+            
+            // Gerçek resim üzerindeki koordinatlar
+            const extractX = relativeX * ratioX;
+            const extractY = relativeY * ratioY;
+            const extractW = cropRect.w * ratioX;
+            const extractH = cropRect.h * ratioY;
+            
+            // Sınırların dışına çıkmayı engelle
+            const finalX = Math.max(0, extractX);
+            const finalY = Math.max(0, extractY);
+            const finalW = Math.min(canvas.width - finalX, extractW);
+            const finalH = Math.min(canvas.height - finalY, extractH);
+            
+            if(finalW <= 0 || finalH <= 0) {
+                showToast("Geçersiz seçim alanı!");
+                return;
+            }
+
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = finalW;
+            tempCanvas.height = finalH;
+            const tempCtx = tempCanvas.getContext('2d');
+            
+            // Ana canvas'tan sadece o parçayı al ve geçici canvas'a çiz
+            tempCtx.drawImage(canvas, finalX, finalY, finalW, finalH, 0, 0, finalW, finalH);
+            
+            const base64Cropped = tempCanvas.toDataURL('image/png');
+            
+            toggleCropMode(); // Modu kapat ve UI temizle
+            runOCR(base64Cropped);
+        }
+
+        // TOPLU METİN ÇIKARMA (BATCH OCR)
+        async function extractTextBatchLocal() {
+            if(!currentBookInfo || currentBookInfo.pages.length === 0) return;
+
+            // Sadece resim olan, metni dolu OLMAYAN sayfaları bulalım
+            const pagesToProcess = currentBookInfo.pages.filter(p => p.isImage && p.content && !p.arabicText.trim());
+
+            if(pagesToProcess.length === 0) {
+                showToast("Tüm sayfalar okunmuş veya resim bulunamadı.");
+                return;
+            }
+
+            const lang = document.getElementById('ocr-lang').value;
+            isProcessCanceled = false;
+
+            const modal = document.getElementById('progress-modal');
+            const pBar = document.getElementById('progress-bar');
+            const pText = document.getElementById('progress-text');
+            
+            document.getElementById('progress-icon').className = 'fa-solid fa-wand-magic-sparkles text-amber-500 text-5xl mb-4 animate-pulse';
+            document.getElementById('progress-title').innerText = "Toplu Metin Çıkarılıyor...";
+            document.getElementById('progress-desc').innerText = "Bu işlem bilgisayarınızın hızına göre biraz zaman alabilir.";
+            document.getElementById('cancel-progress-btn').classList.remove('hidden');
+
+            modal.classList.remove('hidden');
+            pBar.style.width = '0%'; pText.innerText = `0 / ${pagesToProcess.length} Sayfa Okundu`;
+
+            let processedCount = 0;
+
+            for (let i = 0; i < currentBookInfo.pages.length; i++) {
+                if (isProcessCanceled) break;
+                let page = currentBookInfo.pages[i];
+
+                if (page.isImage && page.content && !page.arabicText.trim()) {
+                    try {
+                        const result = await Tesseract.recognize(page.content, lang, { logger: m => {} });
+                        page.arabicText = result.data.text;
+                    } catch (error) {
+                        console.error("Sayfa Okuma Hatası:", error);
+                        page.arabicText = "[OKUMA HATASI]";
+                    }
+                    
+                    processedCount++;
+                    let percentage = ((processedCount / pagesToProcess.length) * 100).toFixed(0);
+                    pBar.style.width = percentage + '%';
+                    pText.innerText = `${processedCount} / ${pagesToProcess.length} Sayfa Okundu`;
+                    
+                    saveData(); // Her sayfa sonrası kaydet
+                    
+                    // Eğer o an ekranda bu sayfa açıksa canlı canlı görsün
+                    if(activePageIndex === i) renderCurrentPage();
+                }
+            }
+            
+            modal.classList.add('hidden');
+            if(!isProcessCanceled) showToast("Toplu okuma başarıyla tamamlandı!");
+            else showToast("Toplu okuma işlemi iptal edildi.");
+        }
+
+    </script>
+</body>
+</html>
